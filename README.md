@@ -164,180 +164,105 @@ Materiaal bijeen brengen en juiste schakelen volgens de schema's.
 #
 **Hieronder is de gebruikte arduino script te vinden:**
 ```
-// This sketch demonstrates connecting and sending telemetry
-// using ThingsBoard SDK
-//
-// Hardware:
-//  - Arduino Uno
-//  - ESP8266 connected to Arduino Uno
-#include "ThingsBoard.h"
-#include <WiFi.h>
-#include "DHTesp.h"
-#define WIFI_AP             "StayHome"
-#define WIFI_PASSWORD       "JustGuessIt"
+import time
+import thingsboard
 
+WIFI_AP = "StayHome"
+WIFI_PASSWORD = "JustGuessIt"
+TOKEN = "mrU9ltHmgtyCzmDMrjyP"
+THINGSBOARD_SERVER = "tb.wouterpeetermans.com"
+SERIAL_DEBUG_BAUD = 9600
+echoPin1 = 2  # Echo Pin for sonar 1
+trigPin1 = 14  # Trigger Pin for sonar 1
+echoPin2 = 0  # Echo Pin for sonar 2
+trigPin2 = 4  # Trigger Pin for sonar 2
 
-// See https://thingsboard.io/docs/getting-started-guides/helloworld/
-// to understand how to obtain an access token
+tb = thingsboard.ThingsBoard(THINGSBOARD_SERVER, TOKEN)
+dht = thingsboard.DHT11(5)
 
+last_msg = 0
+temperature = 0
+humidity = 0
+distance = 0
+distance3 = 1  # om de count te doen kloppen
+count = 0
+free_slot = 0
 
-#define TOKEN               "mrU9ltHmgtyCzmDMrjyP"
-#define THINGSBOARD_SERVER  "tb.wouterpeetermans.com"
+def setup():
+    thingsboard.serial_debug_begin(SERIAL_DEBUG_BAUD)
+    dht.setup()
 
+    setup_wifi()
 
-// Baud rate for serial debug
-#define SERIAL_DEBUG_BAUD   9600
+def setup_wifi():
+    thingsboard.delay(10)
+    thingsboard.serial_println()
+    thingsboard.serial_print("Connecting to ")
+    thingsboard.serial_println(WIFI_AP)
+    thingsboard.connect_wifi(WIFI_AP, WIFI_PASSWORD)
+    while not thingsboard.is_wifi_connected():
+        thingsboard.delay(500)
+        thingsboard.serial_print(".")
+    thingsboard.serial_println()
+    thingsboard.serial_println("WiFi connected")
+    thingsboard.serial_println("IP address: ")
+    thingsboard.serial_println(thingsboard.get_local_ip())
 
+def loop():
+    global last_msg, temperature, humidity, distance, distance3, count, free_slot
 
-#define echoPin1 2 // Echo Pin for sonar 1
-#define trigPin1 14 // Trigger Pin for sonar 1
+    if not tb.connected():
+        thingsboard.serial_print("Connecting to: ")
+        thingsboard.serial_print(THINGSBOARD_SERVER)
+        thingsboard.serial_print(" with token ")
+        thingsboard.serial_println(TOKEN)
+        if not tb.connect():
+            thingsboard.serial_println("Failed to connect")
+            return
 
-#define echoPin2 0 // Echo Pin for sonar 1
-#define trigPin2 4 // Trigger Pin for sonar 1
-long duration1, distance1; 
-long duration2, distance2; 
-long duration3, distance3; 
-// Initialize the WiFI client object
-WiFiClient espClient;
+    now = thingsboard.millis()
+    if now - last_msg > 5000:
+        last_msg = now
+        thingsboard.serial_println("Sending data...")
+        new_values = dht.get_temp_and_humidity()
+        if dht.get_status() != 0:
+            thingsboard.serial_println("DHT11 error status: " + dht.get_status_string())
 
-// Initialize ThingsBoard instance
-ThingsBoard tb(espClient);
+        temperature = new_values.temperature
+        temp_string = "{:.2f}".format(temperature)
 
+        humidity = new_values.humidity
+        hum_string = "{:.2f}".format(humidity)
 
-DHTesp dht;
+        distance = get_distance_cm()
+        dis_string = str(distance)
 
+        distance1 = duration1 / 58
+        distance1 = 1 if distance1 < 10 else 0
 
-long lastMsg = 0;
-char msg[50];
-int value = 0;
+        distance2 = duration2 / 58
 
-const unsigned int TRIG_PIN = 0;
-const unsigned int ECHO_PIN = 4;
+        # Update count and free_slot
+        count = distance1 + distance2 + distance3
+        free_slot = 3 - count
 
-float temperature = 0;
-float humidity = 0;
-float distance = 0;
-int distance3 = 1 // om de count te doen kloppen
-int count = 0;
-int freeSlot = 0;
-void setup() {
-  // initialize serial for debugging
-  Serial.begin(SERIAL_DEBUG_BAUD);
-  dht.setup(5, DHTesp::DHT11);
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-  setup_wifi();
-}
+        thingsboard.serial_println(free_slot)
 
+        tb.send_telemetry("temp", temperature)
+        tb.send_telemetry("hum", humidity)
+        tb.send_telemetry("slot", free_slot)
 
-void setup_wifi() {
+    tb.loop()
 
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(WIFI_AP);
-  WiFi.begin(WIFI_AP, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
+def get_distance_cm():
+    duration = thingsboard.pulse_in(echoPin1, thingsboard.HIGH)
+    return int(duration * 0.0343 / 2)
 
+setup()
+while True:
+    loop()
+    thingsboard.delay(10)
 
-void loop() {
-
-  if (!tb.connected()) {
-    // Connect to the ThingsBoard
-    Serial.print("Connecting to: ");
-    Serial.print(THINGSBOARD_SERVER);
-    Serial.print(" with token ");
-    Serial.println(TOKEN);
-    if (!tb.connect(THINGSBOARD_SERVER, TOKEN)) {
-      Serial.println("Failed to connect");
-      return;
-    }
-  }
-  long now = millis();
-  if (now - lastMsg > 5000) {
-    lastMsg = now;
-    Serial.println("Sending data...");
-    TempAndHumidity newValues = dht.getTempAndHumidity();
-    if (dht.getStatus() != 0) {
-      Serial.println("DHT11 error status: " + String(dht.getStatusString()));
-    }
-
-    // Temperature in Celsius
-    temperature = newValues.temperature;
-    // Uncomment the next line to set temperature in Fahrenheit
-    // (and comment the previous temperature line)
-    //temperature = 1.8 * bme.readTemperature() + 32; // Temperature in Fahrenheit
-
-    // Convert the value to a char array
-    String tempString;
-    tempString = String(temperature);
-    Serial.print("Temperature: ");
-    Serial.println(tempString);
-    humidity = newValues.humidity;
-
-    // Convert the value to a char array
-    String humString;
-    humString = String(humidity);
-    Serial.print("Humidity: ");
-    Serial.println(humString);
-    int distance = getDistanceCm();
-
-    String disString;
-    disString = String(distance);
-    Serial.print("Distance: ");
-    Serial.println(disString);
-    const unsigned long duration = pulseIn(ECHO_PIN, HIGH);
-
-
-    distance1 = duration1 / 58.2;
-    if (distance1 < 10)
-      distance1 = 1;
-    else distance1 = 0;
-
-     distance2 = duration2 / 58.2;
-    if (distance2 < 10)
-      distance2 = 1;
-    else distance1 = 0;
-
-    count = distance1 + distance2 + distance3;
-    freeSlot = 3 - count;
-    // number of total slot is sent to esp32
-    Serial.println(freeSlot);
-    // the status is updated every 30 seconds.
-    delay(5000);
-
-
-    
-    tb.sendTelemetryFloat("temp", temperature);
-    tb.sendTelemetryFloat("hum", humidity);
-    tb.sendTelemetryFloat("slot", freeSlot);
-  }
-
-  tb.loop();
-}
-int getDistanceCm() { //een functie die de meting uitvoert en de afstand returned.
-  long duration;
-  // Clears the trigPin
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  // Sets the trigPin on HIGH state for 10 micro seconds
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  // Reads the echoPin, returns the sound wave travel time in microseconds
-  duration = pulseIn(ECHO_PIN, HIGH); //pulseIn meet de tijd dat het duurt voor deze pin terug hoog wordt.
-  // Calculating the distance
-  return duration * 0.0343 / 2;
-}
 ```
 
  
